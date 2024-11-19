@@ -69,9 +69,6 @@ else
 riscv-march-$(CONFIG_TOOLCHAIN_NEEDS_EXPLICIT_ZICSR_ZIFENCEI) := $(riscv-march-y)_zicsr_zifencei
 endif
 
-# Check if the toolchain supports Zihintpause extension
-riscv-march-$(CONFIG_TOOLCHAIN_HAS_ZIHINTPAUSE) := $(riscv-march-y)_zihintpause
-
 # XUANTIE ISA
 riscv-march-$(CONFIG_XUANTIE_ISA) := $(riscv-march-y)_xtheadc
 
@@ -215,3 +212,11 @@ rv32_nommu_virt_defconfig:
 PHONY += rv64ilp32_defconfig
 rv64ilp32_defconfig:
 	$(Q)$(MAKE) -f $(srctree)/Makefile defconfig 64ilp32.config
+
+PHONY += xuantie_defconfig
+xuantie_defconfig:
+	$(Q)$(MAKE) -f $(srctree)/Makefile defconfig 12HZ.config thp.config fs.config
+
+PHONY += xuantie_debug_defconfig
+xuantie_debug_defconfig:
+	$(Q)$(MAKE) -f $(srctree)/Makefile defconfig thp.config fs.config debug.config ftrace.config ebpf.config kdump.config sched.config

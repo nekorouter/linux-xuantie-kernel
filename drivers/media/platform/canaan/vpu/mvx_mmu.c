@@ -33,6 +33,7 @@
 #include <linux/debugfs.h>
 #include <linux/dma-buf.h>
 #include <linux/dma-mapping.h>
+#include <linux/dma-map-ops.h>
 #include <linux/gfp.h>
 #include <linux/list.h>
 #include <linux/sched.h>
@@ -615,7 +616,7 @@ phys_addr_t mvx_mmu_alloc_page(struct device *dev)
 	phys_addr_t pa;
 	dma_addr_t dma_handle;
 
-	page = alloc_page(GFP_KERNEL | __GFP_ZERO | __GFP_NORETRY);
+	page = dma_alloc_from_contiguous(dev, 1, 0, 0);
 	if (page == NULL)
 		return 0;
 
@@ -628,13 +629,14 @@ phys_addr_t mvx_mmu_alloc_page(struct device *dev)
 	}
 
 	pa = (phys_addr_t)dma_handle;
+	memset(page_address(page), 0, PAGE_SIZE);
 
 	dma_sync_single_for_device(dev, pa, PAGE_SIZE, DMA_TO_DEVICE);
 
 	return pa;
 
 free_page:
-	__free_page(page);
+	dma_release_from_contiguous(dev, page, 1);
 	return 0;
 }
 
@@ -649,7 +651,7 @@ void mvx_mmu_free_contiguous_pages(struct device *dev, phys_addr_t pa,
 	page = phys_to_page(pa);
 
 	dma_unmap_page(dev, pa, npages << PAGE_SHIFT, DMA_BIDIRECTIONAL);
-	__free_pages(page, get_order(npages << PAGE_SHIFT));
+	dma_release_from_contiguous(dev, page, npages);
 }
 
 phys_addr_t mvx_mmu_alloc_contiguous_pages(struct device *dev, size_t npages)
@@ -659,8 +661,7 @@ phys_addr_t mvx_mmu_alloc_contiguous_pages(struct device *dev, size_t npages)
 	dma_addr_t dma_handle;
 	size_t size = (npages << PAGE_SHIFT);
 
-	page = alloc_pages(GFP_KERNEL | __GFP_ZERO | __GFP_NORETRY,
-			   get_order(size));
+	page = dma_alloc_from_contiguous(dev, npages, 0, 0);
 	if (page == NULL)
 		return 0;
 
@@ -673,13 +674,14 @@ phys_addr_t mvx_mmu_alloc_contiguous_pages(struct device *dev, size_t npages)
 	}
 
 	pa = (phys_addr_t)dma_handle;
+	memset(page_address(page), 0, size);
 
 	dma_sync_single_for_device(dev, pa, size, DMA_TO_DEVICE);
 
 	return pa;
 
 free_pages:
-	__free_pages(page, get_order(size));
+	dma_release_from_contiguous(dev, page, npages);
 	return 0;
 }
 
@@ -693,7 +695,7 @@ void mvx_mmu_free_page(struct device *dev, phys_addr_t pa)
 	page = phys_to_page(pa);
 
 	dma_unmap_page(dev, pa, PAGE_SIZE, DMA_BIDIRECTIONAL);
-	__free_page(page);
+	dma_release_from_contiguous(dev, page, 1);
 }
 
 struct mvx_mmu_pages *mvx_mmu_alloc_pages(struct device *dev, size_t count,
@@ -716,27 +718,32 @@ struct mvx_mmu_pages *mvx_mmu_alloc_pages(struct device *dev, size_t count,
 	pages->capacity = capacity;
 	INIT_LIST_HEAD(&pages->dmabuf);
 
-	for (pages->count = 0; pages->count < count;) {
+	if (count) {
+		/*
+		 * Allocate a Linux page. It will typically be of the same size
+		 * as the MVE page, but could also be larger.
+		 */
+
+		/*
+		 * If the Linux page is larger than the MVE page, then
+		 * we iterate and add physical addresses with an offset from
+		 * the Linux page.
+		 */
 		phys_addr_t page;
 		unsigned int i;
 
-			/*
-			 * Allocate a Linux page. It will typically be of the same size
-			 * as the MVE page, but could also be larger.
-			 */
-		page = mvx_mmu_alloc_page(dev);
+		page = mvx_mmu_alloc_contiguous_pages(dev, count);
 		if (page == 0) {
 			ret = -ENOMEM;
 			goto release_pages;
 		}
 
-			/*
-			 * If the Linux page is larger than the MVE page, then
-			 * we iterate and add physical addresses with an offset from
-			 * the Linux page.
-			 */
-		for (i = 0; i < MVX_PAGES_PER_PAGE; i++)
-			pages->pages[pages->count++] = page + i * MVE_PAGE_SIZE;
+		for (pages->count = 0; pages->count < count;) {
+			for (i = 0; i < MVX_PAGES_PER_PAGE; i++) {
+				pages->pages[pages->count++] = page + i * MVE_PAGE_SIZE;
+				page += MVE_PAGE_SIZE;
+			}
+		}
 	}
 
 	return pages;
@@ -917,16 +924,19 @@ int mvx_mmu_resize_pages(struct mvx_mmu_pages *pages, size_t npages)
 	}
 
 	/* Allocate pages if npage is larger than allocated pages. */
-	while (pages->count < npages) {
+	if (pages->count < npages) {
 		phys_addr_t page;
 		unsigned int i;
 
-		page = mvx_mmu_alloc_page(pages->dev);
+		page = mvx_mmu_alloc_contiguous_pages(pages->dev, npages - pages->count);
 		if (page == 0)
 			return -ENOMEM;
 
-		for (i = 0; i < MVX_PAGES_PER_PAGE; i++)
-			pages->pages[pages->count++] = page + i * MVE_PAGE_SIZE;
+		for (; pages->count < npages;) {
+			for (i = 0; i < MVX_PAGES_PER_PAGE; i++)
+				pages->pages[pages->count++] = page + i * MVE_PAGE_SIZE;
+				page += MVE_PAGE_SIZE;
+		}
 	}
 
 	return remap_pages(pages, oldcount);

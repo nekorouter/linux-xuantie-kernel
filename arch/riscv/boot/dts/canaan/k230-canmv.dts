@@ -4,7 +4,6 @@
  */
 
 #include "k230.dtsi"
-#include "display-st7701-480x800.dtsi"
 
 / {
 	model = "Canaan CanMV-K230";
@@ -21,6 +20,14 @@
 	ddr: memory@0 {
 		device_type = "memory";
 		reg = <0x0 0x0 0x0 0x20000000>;
+	};
+
+	sound {
+		status                      = "okay";
+		compatible                  = "canaan,k230-audio-inno";
+		canaan,model                = "K230_I2S_INNO";
+		canaan,k230-i2s-controller  = <&i2s>;
+		canaan,k230-audio-codec     = <&inno_codec>;
 	};
 };
 
@@ -50,16 +57,69 @@
 
 &i2c4 {
 	status = "okay";
-	touchscreen@38 {
-		compatible = "edt,edt-ft5306";
-		reg = <0x38>;
-		reset-gpios = <&gpio0_ports 21 GPIO_ACTIVE_LOW>;
-		interrupt-parent = <&gpio0_ports>;
-		interrupts = <22 IRQ_TYPE_EDGE_FALLING>;
+
+	lt9611: hdmi-bridge@3b {
+		compatible = "lontium,lt9611";
+		reg = <0x3b>;
+		reset-gpios = <&gpio1_ports 10 GPIO_ACTIVE_HIGH>;
+		interrupt-parent = <&gpio1_ports>;
+		interrupts = <11 IRQ_TYPE_EDGE_FALLING>;
+		ports {
+			#address-cells  = <1>;
+			#size-cells     = <0>;
+			port@1 {
+				reg = <1>;
+				lt9611_in: endpoint {
+					remote-endpoint = <&dsi_out_lt9611>;
+				};
+			};
+
+			port@2 {
+				reg = <2>;
+				lt9611_out: endpoint {
+					remote-endpoint = <&hdmi_connector_in>;
+				};
+			};
+		};
 	};
 };
 
-&lcd {
-	dsi_reset-gpios = <&gpio0_ports 20 GPIO_ACTIVE_HIGH>;
-	backlight_gpio-gpios = <&gpio0_ports 25 GPIO_ACTIVE_HIGH>;
+&dsi {
+	ports {
+		port@1 {
+			reg = <1>;
+			dsi_out_lt9611: endpoint {
+				remote-endpoint = <&lt9611_in>;
+			};
+		};
+	};
+};
+
+/ {
+	hdmi: connector {
+		compatible = "hdmi-connector";
+		label = "hdmi";
+		type = "a";
+
+		port {
+			hdmi_connector_in: endpoint {
+				remote-endpoint = <&lt9611_out>;
+			};
+		};
+	};
+};
+
+&vo {
+	vth_line = <10>;
+};
+
+&mmc_sd0 {
+	status = "okay";
+	io_fixed_1v8;
+	rx_delay_line = <0x0d>;
+	tx_delay_line = <0x00>;
+	bcmdhd_wlan {
+		compatible = "android,bcmdhd_wlan";
+		gpio_wl_reg_on = <&gpio0_ports 1 GPIO_ACTIVE_HIGH>;
+	};
 };
